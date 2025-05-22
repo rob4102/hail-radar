@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { parse } = require('csv-parse/sync');
 const { initDB } = require('./db');
+const { reverseGeocode } = require('./reverseGeocode'); // ⬅️ Add this import
 
 const CSV_URL = 'https://www.spc.noaa.gov/climo/reports/today_hail.csv';
 
@@ -11,7 +12,7 @@ async function fetchAndSaveAllReports() {
   const records = parse(csv, {
     columns: true,
     skip_empty_lines: true,
-    trim: true
+    trim: true,
   });
 
   const db = await initDB();
@@ -22,22 +23,37 @@ async function fetchAndSaveAllReports() {
       Time: time,
       Size: sizeRaw,
       Location: location,
-      County,
-      State,
       Lat: lat,
       Lon: lon,
-      Comments: comments
     } = row;
 
-    // Normalize size from e.g. "200" → "2.00"
     const size = parseFloat(sizeRaw) / 100;
-
     const date = new Date().toISOString().split('T')[0];
 
-    await db.run(`
-      INSERT INTO hail_reports (date, time, location, lat, lon, size)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [date, time, location, parseFloat(lat), parseFloat(lon), size.toFixed(2)]);
+    let stateCode = '';
+
+    try {
+      const { state } = await reverseGeocode(lat, lon);
+      stateCode = state || '';
+    } catch (err) {
+      console.warn(`⚠️ Could not geocode (${lat}, ${lon}): ${err.message}`);
+    }
+
+    await db.run(
+      `
+      INSERT INTO hail_reports (date, time, location, lat, lon, size, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+      [
+        date,
+        time,
+        location,
+        parseFloat(lat),
+        parseFloat(lon),
+        size.toFixed(2),
+        stateCode,
+      ]
+    );
 
     savedCount++;
   }

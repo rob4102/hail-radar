@@ -1,27 +1,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { initDB } = require('./db');
-
-// McHenry, IL coordinates
-const MCHENRY_LAT = 42.3334;
-const MCHENRY_LON = -88.2668;
-
-// Haversine formula to calculate distance between two lat/lon points (in miles)
-function getDistanceInMiles(lat1, lon1, lat2, lon2) {
-  const toRad = (value) => (value * Math.PI) / 180;
-  const R = 3958.8; // Earth radius in miles
-
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLon / 2) ** 2;
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
+const { reverseGeocode } = require('./reverseGeocode');
 
 async function fetchHailReports() {
   const url = 'https://www.spc.noaa.gov/climo/reports/today.html';
@@ -48,20 +28,26 @@ async function fetchHailReports() {
     const lat = parseFloat(rawLat.slice(0, 2) + '.' + rawLat.slice(2));
     const lon = parseFloat(rawLon.slice(0, 3) + '.' + rawLon.slice(3));
 
-    const distance = getDistanceInMiles(lat, -lon, MCHENRY_LAT, MCHENRY_LON);
+    let stateCode = '';
 
-    if (distance <= 25) { // Only save reports within 25 miles of McHenry
-      await db.run(`
-        INSERT INTO hail_reports (date, time, location, lat, lon, size)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [date, time, location, lat, -lon, size]);
-
-      savedCount++;
-      console.log(`📍 Hail near McHenry: ${location} (${distance.toFixed(1)} mi)`);
+    try {
+      const { state } = await reverseGeocode(lat, -lon);
+      stateCode = state || '';
+    } catch (err) {
+      console.warn(`⚠️ Reverse geocode failed for (${lat}, ${-lon}): ${err.message}`);
     }
+
+    await db.run(
+      `INSERT INTO hail_reports (date, time, location, lat, lon, size, state)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [date, time, location, lat, -lon, size, stateCode]
+    );
+
+    savedCount++;
+    console.log(`📍 Saved: ${location}, ${stateCode} (${lat}, ${-lon})`);
   }
 
-  console.log(`✅ Saved ${savedCount} hail reports near McHenry, IL.`);
+  console.log(`✅ Saved ${savedCount} hail reports from all states.`);
 }
 
 module.exports = fetchHailReports;
